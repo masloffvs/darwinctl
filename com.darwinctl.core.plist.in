@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@BIN@</string>
+    <string>core_init</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+    <key>PathState</key>
+    <dict>
+      <key>/Users/@LOGIN@/DarwinUnits</key><true/>
+    </dict>
+  </dict>
+
+ <key>EnvironmentVariables</key>
+ <dict>
+   <key>PATH</key>
+   <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+   <key>DARWINCTL_UNITS_DIR</key>
+   <string>/Users/@LOGIN@/DarwinUnits</string>
+   <key>HOME</key>
+   <string>/Users/@LOGIN@</string>
+   <key>USER</key>
+   <string>@LOGIN@</string>
+   <key>LOGNAME</key>
+   <string>@LOGIN@</string>
+ </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/@LOGIN@</string>
+  <key>StandardOutPath</key>
+  <string>/var/log/darwinctl-core.out</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/darwinctl-core.err</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+  
+</dict>
+</plist>
