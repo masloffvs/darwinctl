@@ -35,12 +35,15 @@ static void expand_home(const char *in, char *out, size_t outsz) {
 		snprintf(out, outsz, "%s", in);
 	}
 }
+
 static void default_units_dir(char *out, size_t n) {
 	expand_home("~/DarwinUnits", out, n);
 }
+
 static void log_path(char *out, size_t n) {
 	expand_home("~/Library/Logs/darwinctl.log", out, n);
 }
+
 static void run_dir(char *out, size_t n) {
 	expand_home("~/Library/Application Support/darwinctl/run", out, n);
 }
@@ -131,24 +134,21 @@ static int parse_array_of_strings(const char *in, char ***out, int *count){
 
 	for(;;){
 		while(isspace((unsigned char)*p)) p++;
-		if(*p==']'){ p++; break; }          // конец массива
-		if(*p==','){ p++; continue; }       // лишняя запятая/разделитель
+		if(*p==']'){ p++; break; }  
+		if(*p==','){ p++; continue; }
 
-		// ожидаем строку в кавычках
 		char buf[1024];
 		if(parse_string(p, buf, sizeof(buf))!=0){
 			free(arr);
 			return -1;
 		}
 
-		// продвигаем p к символу ПОСЛЕ закрывающей кавычки этой строки
-		const char *q = strchr(p, '"');     // открывающая
+		const char *q = strchr(p, '"');    
 		if(!q){ free(arr); return -1; }
-		q = strchr(q+1, '"');               // закрывающая
+		q = strchr(q+1, '"');              
 		if(!q){ free(arr); return -1; }
 		p = q + 1;
 
-		// сохранить элемент
 		if(cnt==cap){
 			cap*=2;
 			char **na=realloc(arr,sizeof(char*)*cap);
@@ -157,7 +157,6 @@ static int parse_array_of_strings(const char *in, char ***out, int *count){
 		}
 		arr[cnt++] = sdup(buf);
 
-		// после строки могут быть пробелы/запятая/закрывающая скобка
 		while(isspace((unsigned char)*p)) p++;
 		if(*p==','){ p++; }
 	}
@@ -337,12 +336,18 @@ static int remove_pidfile(const char *name){
 	return 0;
 }
 
+/** Start a single unit:
+ *   - Forks once; child optionally chdir()s to workdir and execs via /bin/sh -c <exec>.
+ *   - Parent writes pidfile and logs.
+ *  @return 0 on parent side success, <0 on fork failure.
+ *  @security Uses shell interpretation (/bin/sh -c). Ensure 'exec' is trusted.
+ *  @todo Consider posix_spawn with argv splitting and no shell.
+ */
 static int start_unit(const unit_t *u){
 	pid_t pid=fork();
 	if(pid<0){ logf_named(u->name,"fork failed: %s", strerror(errno)); return -1; }
 	if(pid==0){
 		if(u->workdir && *u->workdir) chdir(u->workdir);
-		// Split exec into argv using /bin/sh -c for simplicity
 		execl("/bin/sh","sh","-c",u->exec,(char*)NULL);
 		_exit(127);
 	}
@@ -350,6 +355,10 @@ static int start_unit(const unit_t *u){
 	logf_named(u->name,"started pid=%ld cmd=%s",(long)pid,u->exec);
 	return 0;
 }
+
+/** Stop a single unit by reading its pidfile and signaling the process.
+ *  SIGTERM, wait up to ~5s, then SIGKILL if still alive. Removes pidfile.
+ */
 static int stop_unit(const unit_t *u){
 	pid_t pid=read_pidfile(u->name);
 	if(pid<=0){ logf_named(u->name,"no pidfile"); return -1; }
@@ -368,11 +377,16 @@ static int stop_unit(const unit_t *u){
 	return 0;
 }
 
-// ---------- edit (immutable flip if needed) ----------
-static int edit_unit(const char *unit_name){
+/** Edit a unit file safely:
+ *   - Creates a stub if missing.
+ *   - For existing files: temporarily clears macOS UF_IMMUTABLE, runs $EDITOR, restores flag.
+ *  @return 0 always (logs failures).
+ *  @platform macOS: uses chflags(2) UF_IMMUTABLE.
+ */
+ static int edit_unit(const char *unit_name){
 	char dirp[PATH_MAX]; default_units_dir(dirp,sizeof(dirp));
 	char path[PATH_MAX]; snprintf(path,sizeof(path), "%s/%s.toml", dirp, unit_name);
-	// ensure file exists
+
 	struct stat st;
 	int existed = (stat(path,&st)==0);
 	if(!existed){
@@ -408,6 +422,9 @@ static int edit_unit(const char *unit_name){
 }
 
 // ---------- refresh ----------
+/** Write a simple state index listing all units; used for diagnostics/debug. */
+// But why? I want..
+// Say less
 static void write_state_index(unit_list_t *L){
 	char sp[PATH_MAX]; state_path(sp,sizeof(sp));
 	ensure_parent_dirs(sp);
@@ -429,6 +446,7 @@ out:
 	for(int k=0;k<L.count;k++) free_unit(&L.items[k]); free(L.items);
 	return 0;
 }
+
 static int cmd_refresh(){
 	unit_list_t L; if(load_all_units(&L)!=0){ info("No units"); return 1; }
 	int N=0; int *ord=topo_order(&L,&N);
@@ -443,7 +461,7 @@ static int cmd_edit(const char *name){
 	return edit_unit(name);
 }
 
-// ---------- dependency graph helpers (NEW) ----------
+// ---------- dependency graph helpers ----------
 typedef struct {
 	int **adj;
 	int *adjn;
@@ -458,7 +476,6 @@ static void graph_free(graph_t *g, int n){
 	free(g->adj); free(g->adjn);
 }
 
-// Строим граф: j -> i, если unit i зависит от j (i.after содержит j)
 static void build_graph(unit_list_t *L, graph_t *g){
 	int n=L->count;
 	graph_init(g, n);
@@ -476,14 +493,12 @@ static void build_graph(unit_list_t *L, graph_t *g){
 	}
 }
 
-// Для сортировки детей по имени (стабильный и красивый вывод)
 static unit_list_t *g_sort_L = NULL;
 static int cmp_child_idx(const void *a, const void *b){
 	int ia = *(const int*)a, ib = *(const int*)b;
 	return strcmp(g_sort_L->items[ia].name, g_sort_L->items[ib].name);
 }
 
-// Печать карты с защитой от циклов
 static void print_indent(int depth){
 	for(int i=0;i<depth;i++) printf("  ");
 }
@@ -505,7 +520,8 @@ static void print_map_rec(unit_list_t *L, graph_t *G, int v, int depth, char *vi
 	print_indent(depth);
 	printf("↳ %s\n", L->items[v].name);
 
-	// Отсортируем детей по имени
+	// sorting children by name
+	// has never been so close to failure Stirlec
 	if(G->adjn[v]>0){
 		int n=G->adjn[v];
 		int *kids = malloc(sizeof(int)*n);
@@ -553,6 +569,11 @@ static int cmd_map(const char *rootname){
 	return 0;
 }
 
+/** Create a once-per-boot guard using an exclusive lock file.
+ *  @path /var/run/darwinctl.core.once
+ *  @return 0 if this is the first run in current boot; -1 if already created or on error.
+ *  @rationale /var/run is cleared at boot; simple, robust.
+ */
 static int boot_once_guard(void) {
 	const char *lockpath = "/var/run/darwinctl.core.once";
 	int fd = open(lockpath, O_CREAT | O_EXCL | O_WRONLY, 0644);
@@ -570,6 +591,16 @@ static int boot_once_guard(void) {
 	return 0;
 }
 
+
+/** CLI: core_init.
+ *  Behavior:
+ *    - Enforce once-per-boot via boot_once_guard().
+ *    - Load all units and topo sort.
+ *    - Start 'rootinit' chain (root and all its dependents) in topological order.
+ *    - Optionally start leftover autostart units (if used).
+ *    - Write state index.
+ *  @note This is typically invoked by launchd at boot.
+ */
 static int cmd_core_init(){
 	if (boot_once_guard() != 0) {
 		return 0;
